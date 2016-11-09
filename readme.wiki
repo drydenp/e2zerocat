@@ -1,0 +1,7 @@
+= e2zerocat =
+
+This version is buggy, I discovered later.
+
+Usage would be:
+
+  e2zerocat.sh <device file> | cp --sparse=always /dev/stdin <output file>

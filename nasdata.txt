@@ -1,0 +1,4 @@
+original sed: 39 minutes
+without that one sed: 33 minutes
+with awk: 1 minute 20
+original dumpe2fs was????

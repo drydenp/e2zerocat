@@ -51,36 +51,46 @@ transform_dumpe2fs() {
 	echo "----"
 
 	# Now process all the groups:
-
-	while read l; do
-		[ ! $waitforfree ] && echo "$l" | grep "^Group" > /dev/null && {
-			range=$(echo "$l" | sed "s/.*Blocks \([0-9]\+\)-\([0-9]\+\).*/\1 \2/")
-			start=${range%% *}
-			end=${range##* }
-			waitforfree=yes
-			continue
+	awk '
+		BEGIN {
+			waitforfree = 0
 		}
+		/^Group/ {
+			if (! waitforfree) {
+				range = gensub(/.*Blocks ([0-9]+)-([0-9]+).*/, "\\1 \\2", "g")
+				$0 = range
+				start = $1
+				end = $2
+				print "group:", start, end > "/dev/stderr"
+				waitforfree = 1
+				next
+			}
+		}
+
 		# We must now "substract" the free block ranges from the full range, or otherwise...
 		# make sure we identify both parts.
 
 		# The range always starts with a used block.
-		[ $waitforfree ] && {
-			echo "$l" | grep "^Free blocks" > /dev/null && {
-				ranges=$(echo "$l" | sed "s/.*Free blocks: \?//")
+		/Free blocks/ {
+			if (waitforfree) {
+				sub(/^ *Free blocks: ?/,"")
 
 				# The start of a group can either be used or free.
 				# If it is free it will be our first free range.
 				# If it is used the first free range, if any, will be past
 				# the start of the group.
 
-				# Consume the first range.)
-				while [ -n "$ranges" -a $start -le $end ]; do
-					range=${ranges%%, *}
-					fstart=${range%%-*}
-					fend=${range##*-}
-					ranges=${ranges#*, }
-					# If range and ranges are identical, we are done with that:
-					[ "$range" = "$ranges" ] && ranges=
+				# Split the string into an array of ranges
+				split($0, ranges, ", ")
+
+				# Traverse all the ranges in order:
+				for (i in ranges) {
+					if (start > end) break
+
+					range = ranges[i]
+
+					fstart = gensub(/-.*/, "", "g", range)  # get the part before the dash
+					fend = gensub(/.*-/, "", "g", range)    # get the part after the dash
 
 					# Normally we are now at the start of a used range.
 					# This is because after a free range, we advance our pointer
@@ -90,37 +100,36 @@ transform_dumpe2fs() {
 					# Therefore, if start equals fstart, we *had* no used range
 					# at the beginning and there is nothing to consume there.
 
-					! [ $start -eq $fstart ] && {
-
+					if (start != fstart) {
 						# But since our fstart is now larger, we do have something to consume.
-						echo "used: ${start}-$(( fstart-1 ))"
+						print "used: " start "-" fstart-1
 					}
 
 					# We can now consume the free range we came here for:
-					echo "unused: ${fstart}-${fend}"
+					print "unused: " fstart "-" fend
 
 					# And advance the pointer
-					start=$(( fend + 1 ))
+					start = fend + 1
 
 					# If we are out of ranges in the next cycle but if start
 					# has not advanced beyond end yet, there is a used range left.
 
 					# Otherwise, we ended with a free block.
-				done
+				}
 
 				# So this is the final used range, if any:
-				[ $start -le $end ] && {
-					echo "used: ${start}-${end}"
-
+				if (start <= end) {
+					print "used: " start "-" end
+					
 					# Coincidentally this also covers the situation of no Free blocks.
 				}
 					
 				# This is because the last range may not be a free range.
-				waitforfree=
+				waitforfree = 0
 			}
-			# At this point we just have to throw lines away.
 		}
-	done
+		# At this point we just have to throw lines away.
+	'
 }
 
 # Now that we have our output, we can use it to fuel our engine:

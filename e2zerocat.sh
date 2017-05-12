@@ -66,7 +66,7 @@ transform_dumpe2fs() {
 		# The range always starts with a used block.
 		[ $waitforfree ] && {
 			echo "$l" | grep "^Free blocks" > /dev/null && {
-				ranges=$(echo "$l" | sed "s/.*Free blocks: //")
+				ranges=$(echo "$l" | sed "s/.*Free blocks: \?//")
 
 				# The start of a group can either be used or free.
 				# If it is free it will be our first free range.

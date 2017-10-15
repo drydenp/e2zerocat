@@ -1,6 +1,9 @@
 = e2zerocat =
 
-This version is buggy, I discovered later.
+This version plainly just works but it is not perfected for what it does.
+
+Also the checksumming code is a real slowdown of course, not using any
+dedicated binary for this task.
 
 Usage would be:
 

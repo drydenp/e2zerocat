@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Take device file on $1.
 
@@ -6,7 +6,12 @@
 
 # We will transform the output into a list of ranges in the format "used xxx-yyy" and "unused xxx-yyy".
 
-{ echo -n "" >&3; } 2> /dev/null || exec 3> /dev/null
+{ echo -n "" >&3; } && {
+	echo "Showing checksum output" >&2
+} || {
+	exec 3> /dev/null
+	echo "Ignoring checksum output." >&2
+}
 
 into_fours() {
 	local res
@@ -191,10 +196,18 @@ feed_to_dd() {
 
 	total=$first
 
+	pct=0
+
 	while read l; do
 		range=${l##* }
 		start=${l%%: *}
 		beginning=${range%%-*}
+
+		if [ $(( beginning * 100 / count )) -ge $pct ]; then
+			pct=$(( pct + 1 ))
+			echo "At $pct% of the drive" >&2
+		fi
+
 		ending=${range##*-}
 		amount=$(( ending - beginning + 1 ))
 		[ "$amount" -le 0 ] && {

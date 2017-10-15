@@ -1,6 +1,18 @@
-original sed: 39 minutes
-without that one sed: 33 minutes
-with awk: 1 minute 20
-original dumpe2fs was 47 seconds
+test system: slow ARM with 2TB disk and ca. 750GB data.
 
-complete read of disk: 3h 52m
+original version using Ash and Sed: 39 minutes
+original version replacing one Sed with shell mechanics: 33 minutes
+with awk: 1 minute 20
+only dumpe2fs: 1 minute 6
+
+so awk takes like 14 seconds, and Ash takes over 30 minutes using sed and grep to accomplish the same.
+
+full read time of disk itself (skipping holes): slightly less than 4 hours.
+
+checksum benchmarks:
+
+reading a 161M file on the same host sees:
+- cksum ~ 7.47 seconds ( 4 runs)
+- md5sum -b  ~ 7.35 seconds ( 4 runs )
+- sha1sum -b ~ 13.18 seconds ( 1 run )
+- sum   ~ 10.89 seconds ( 2 runs )

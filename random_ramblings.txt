@@ -1,0 +1,80 @@
+#!/bin/dash
+
+# Changelog:
+# 1st: 09 nov 2016
+
+# This program uses the block size of the filesystem. For a small filesystem like /boot this is typically
+# 1024 bytes per block. For a larger filesystem, this is typically 4096 bytes per block.
+
+# The checksum list that is currently getting output on >3 is in terms of this block size, so it will
+# differ from filesystem to filesystem in how to interpret it.
+
+# For a small ext2 filesystem such as /boot the maximum blocks that are getting checksummed are 4096 *
+# 1024 = 4MB. For a larger ext3 filesystem (for instance) this would be 4096 * 4096 = 16 MB.
+
+# So the checksums you see are checksums of either maximum 4MB or 16MB on these filesystems, and block
+# counts of 1 are then 1kB and 4kB in size.
+
+# Thus, checksumming a filesystem with larger block sizes would also be faster.
+
+# I break down every larger block size into lists of 4096, 1024, 256, 64, 16 and 1.
+
+# Then those individual parts are getting checksummed. The purpose is to store filesystem blocks
+# somewhere. If you can store these filesystem blocks somewhere including their full address. Then
+# you could create a data store that you could either mount directly (SparseBundleFS) or via
+# sparse files themselves (no storage via network?) or you'd have blocks you could apply to some
+# snapshot to make the snapshot the same as the backup (reverse sync).
+
+# The downside of syncing to some remote backup is that your sync becomes dirty over time.
+
+# Incremental backups are easy too though, but you have to implement the mechanics.
+
+# So you could implement incremental sparse bundles. They would be stored in a directory and could be applied in the reverse order of their age, ie. the oldest is applied first. The youngest last. Or, you can apply the youngest first and skip the same blocks in the older ones.
+
+# You could also merge them, etc.
+
+# It would be easy to apply an incremental to an older one.
+
+# However in this system every small change could take up 2GB!!!!
+
+# So this only works if you are using sparse files which may not be possible on a network drive. That means you need better mapping and a lot of code to rearrange blocks or to append them to the log so they overwrite earlier blocks.
+
+# You can also term a backup a collection of blocks. Every backup is then a reference to these individual blocks. If you then have identical checksums, you only store the block once. You then create a mapping from checksum to file location. You also maintain a list of backups that reference these checksums, or a counter with the checksums.
+
+# Removing a backup then would reduce the counter and zero counters would cause the block to be evicted.
+
+# However checksums are not identity relationships so the actual block contents would have to be compared also.
+
+# Checksums then become pointers to hashlists, you can have multiple real blocks per checksum.
+
+# At that point you would still need to be able to mount the things. So the data store is on a network drive
+# including metadata. Your filesystem driver would need to be able to receive some parameters to find the required backup. It would then create a selection of blocks internally to represent this version of the filesystem and present it to you as a single coherent block device. That means you get one bulk backup that contains all of the backups ever until you prune them. This is in fact ideal for having a single backup mirror disk to another disk.
+
+But it doesn't really have a lot of different use cases...
+So what you get is:
+- daemon that pieces together the right pieces from the right files
+- user agent that allows you to ask for a certain "slice"
+- filesystem driver that asks the daemon for required slices depending on mount options.
+- the daemon could also be talking to a daemon on a remote system or could be running on a remote system itself.
+- so the storage system needs to use a form of hash list indexing to index blocks into multiple files. All of this is
+- doable in regular code. You need a programming language that has direct disk access, I believe Java can?
+- You would create a disk mirroring solution. It basically creates snapshots for storage on a remote system.
+- The bottleneck currently is still how do we find which blocks have changed????
+- You would have to more intelligently checksum the metadata blocks individually and use filesystem knowledge
+- to checksum only those files which have changed. So you do need a list of file structure metadata.
+- If you can mount the previous backup, you can get it from there. Otherwise you do need to store a "copy" of the file structure so that you can witness changes.
+- Otherwise you'll just be reading the entire disk each time. If you can create a "copy" of the file structure in memory so to speak you can save that list and compare to the next time you create it.
+
+- That's basically a "find" list + metadata (file, size, date, attributes, extended attributes stored on the filesystem).
+- You would then need to ask the filesystem which blocks coincide with that file.
+- Or you could directly read the filesystem structure and obtain metadata from there to see which files have changed. In other words, every inode (on ext2) would contain information and every directory inode, I guess, would.
+- On the other hand creating a single backup in this way might cost much more space than is actually now used on the filesystem but would be very simple to create provided we can seek and would be relatively simple to restore to a snapshot of the system. Restoring the snapshot would require creating checksums for the entire current snapshot and either "live replacing them" with older values or first reading the entire disk before proceeding. Since reading and writing at the same time would have benefits, I see this system just proceeding on a snapshot.
+- So what you get is a way to store a snapshot remotely and for you to be able to restore a snapshot to a previous state. These would be the only two use cases. There would be no incremental backups unless you immediately merged them (not clean) and so the only two use cases would be backup and restore.
+- Expanding that you would either introduce incremental sets that can be restored in order (or reverse order) or you would need to create an entire multi-backup system. With the checksums and all. The initial backup and restore only system is doable in a few days.
+You basically only need shell scripts for that. However, it requires direct access. Not necessarily. It requires you to write a stream into a pipe. You must write to split and split must be able to write to ftp for instance. The files on the remote share will then all be the same 2GB size but normally comprised of many zeroes. In fact you could choose to compress the files prior to writing them, which would cause them to all be of different sizes.
+Restoring would mean to cat them all together and gunzip them, or cat them individually and gunzip them. There will be no sparseness in them and thus will represent full 2GB blocks individually or as a whole the entire block device if they are compressed en masse. The drawback of compressing en masse is that the operation becomes a single continuous operation that needs to be split after the compression and whose files are all independently linked together to form a single whole, that cannot ever be referenced individually. Therefore, you could not restore individual blocks or even reference them in the backup. On the other hand, compressing them individually gives varying file sizes but *does* require decompression of a 2GB file prior to every operation. This means that restoration would then require a 2GB scratch space.
+Using direct access would then only be possible if we do not compress.
+Therefore the fastest restoration is definitely possible only using no-compression. The alternative is to use a lot more files, but the downside of no-compression is definitely longer upload-times.
+So if you are using block backup and no compression the upload will just take 3x as long if you are using only 1/3 of the data on the disk, and you are outputting zero block data in a stream.
+Compressing zero data might be rather slow though on a NAS. Not sure.
+

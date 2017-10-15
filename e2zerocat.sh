@@ -1,4 +1,4 @@
-#!/bin/dash
+#!/bin/sh
 
 # Take device file on $1.
 
@@ -61,7 +61,6 @@ transform_dumpe2fs() {
 				$0 = range
 				start = $1
 				end = $2
-				print "group:", start, end > "/dev/stderr"
 				waitforfree = 1
 				next
 			}
@@ -81,10 +80,10 @@ transform_dumpe2fs() {
 				# the start of the group.
 
 				# Split the string into an array of ranges
-				split($0, ranges, ", ")
+				number_ranges = split($0, ranges, ", ")
 
 				# Traverse all the ranges in order:
-				for (i in ranges) {
+				for (i = 1; i <= number_ranges; i++) {
 					if (start > end) break
 
 					range = ranges[i]
@@ -132,6 +131,45 @@ transform_dumpe2fs() {
 	'
 }
 
+verify_transform() {
+	# The used and unused blocks we get have to be consecutive and span the entire range.
+
+	start=0
+	error=0
+	total=0
+	while read header content; do
+		case $header in
+			blocks:)
+				block_count=$content
+				;;
+			used:|unused:)
+				begin=${content%-*}
+				if [ -z "$first" ]; then
+					first=$begin
+				fi
+				end=${content#*-}
+				amount=$(( end - begin + 1 ))
+				if [ $begin -ne $start ]; then
+					echo "We have a range that doesn't start at the beginning of the next range: begins at $begin, should begin at $start" >&2
+					error=1
+				fi
+				start=$(( end + 1 ))
+				total=$(( total + amount ))
+				;;
+		esac
+	done
+	echo "First block range starts at $first" >&2
+	echo "Last block range ends at $end" >&2
+	[ $total -ne $block_count ] && {
+		echo "Total amount of blocks found in ranges does not coincide with total block size for device: $block_count blocks but $total counted" >&2
+		error=1
+	}
+	if [ $error -eq 0 ]; then
+		echo "No errors found" >&2
+	fi
+	return $error
+}
+
 # Now that we have our output, we can use it to fuel our engine:
 
 feed_to_dd() {
@@ -142,12 +180,15 @@ feed_to_dd() {
 	size=$(echo "$out" | grep "^size" | sed "s/.* //")
 	count=$(echo "$out" | grep "^blocks" | sed "s/.* //")
 
-	# This is getting weird, but first dd the blocks leading up to the first block.
+	# The first block may not be at 0, so we dd the blocks leading up to it first.
 
 	dd if="$device" bs=$size count=$first 2> /dev/null || {
 		echo "DD fails, cannot continue"
 		exit 1
 	}
+
+	# Counter
+
 	total=$first
 
 	while read l; do
@@ -156,23 +197,26 @@ feed_to_dd() {
 		beginning=${range%%-*}
 		ending=${range##*-}
 		amount=$(( ending - beginning + 1 ))
-		[ "$amount" -eq 0 ] && {
-			echo "amount zero with $beginning and $ending and $l" >&3
+		[ "$amount" -le 0 ] && {
+			echo "Bug in the script. Amount cannot be zero or negative at $beginning and $ending and $l" >&2
 		}
 
 		[ "$start" = "used" ] && {
+			# This outputs the blockrange to stdout
+
 			dd if="$device" bs=$size skip=$beginning count=$amount 2> /dev/null
 
-			# This checksum code makes it twice as slow.
-			# But I can't actually use the shell to "save" binary data.
-			# Or even split it, so the amount of dd calls goes up considerably.
+			# This code calls md5sum on pieces of the block range to get checksums
+			# for individual chunks not larger than 16 MB normally.
 
-			# In C if I could read the data myself (in one read) and then calculate
-			# the checksums myself 
+			# It basically uses the filesystem cache to reread an already read and copied block.
+			# On slow systems the bottleneck is in the md5sum code, not in the calling.
 
-			# We will split each range into 16MB blocks or smaller.
 			sequence=$(into_fours $amount)
-			echo "** amount = $amount" >&3
+
+			# This is verification code, the individual amounts must sum up to $amount
+			echo "* amount = $amount" >&3
+
 			while [ -n "$sequence" ]; do
 				next=${sequence%% *}
 				oldsequence=$sequence
@@ -181,9 +225,11 @@ feed_to_dd() {
 
 				md5=$(dd if="$device" bs=$size skip=$beginning count=$next 2> /dev/null | md5sum)
 				md5=${md5%% *}
-				echo "* $beginning $next $md5" >&3
+				echo "$beginning $next $md5" >&3
 				beginning=$(( beginning + next ))
 			done
+
+			# Splitting the individual block ranges with a newline:
 			echo >&3
 
 			true
@@ -192,11 +238,14 @@ feed_to_dd() {
 		}
 		total=$(( total + amount ))
 	done
+
+	# This is some verification code
 	echo "Total blocks written: $total" >&2
 	echo "Block count for device: $count" >&2
+	# These numbers have to match
 }
 		
-list=$(dumpe2fs "$1" 2> /dev/null | transform_dumpe2fs)
+list=$(dumpe2fs "$1" 2> /dev/null | transform_dumpe2fs) || echo "Dump transform failed." >&2
 
-echo "$list" | feed_to_dd "$1"
+printf "%s\n" "$list" | feed_to_dd "$1"
 	
